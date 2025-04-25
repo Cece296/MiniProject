@@ -3,7 +3,7 @@ import utm
 import matplotlib.pyplot as plt
 
 # 1. Load the logfile
-file_path = file_path = r"C:\Users\tkmir\OneDrive\Desktop\miniproject2\DJIFlightRecord_2021-03-18_[13-04-51]-TxtLogToCsv.csv"
+file_path = file_path = "DJIFlightRecord_2021-03-18_[13-04-51]-TxtLogToCsv.csv"
 df = pd.read_csv(file_path, encoding='latin1', low_memory=False)
 
 # 2. Find first video recording segment
