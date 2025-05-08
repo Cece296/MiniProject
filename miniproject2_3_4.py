@@ -1,7 +1,7 @@
 import cv2
 import numpy as np
 import matplotlib.pyplot as plt
-
+import g2o
 # -------- USER SETTINGS --------
 FEATURE_TYPE = 'ORB'      # 'SIFT' or 'ORB'
 FRAME1_PATH = 'extractedframes/frame_0001.jpg'
@@ -248,6 +248,94 @@ point_errors = np.array(errors).reshape(-1, 2).mean(axis=1)
 # Normalize for colormap
 errors_norm = (point_errors - point_errors.min()) / (point_errors.ptp() + 1e-8)
 colors = plt.cm.viridis(errors_norm)
+
+print("\n--- Step 13: Bundle Adjustment using g2o ---")
+
+def run_g2o_bundle_adjustment(map, K):
+    optimizer = g2o.SparseOptimizer()
+    solver = g2o.BlockSolverSE3(g2o.LinearSolverDenseSE3())
+    algorithm = g2o.OptimizationAlgorithmLevenberg(solver)
+    optimizer.set_algorithm(algorithm)
+
+    fx, fy = K[0, 0], K[1, 1]
+    cx, cy = K[0, 2], K[1, 2]
+    cam_params = g2o.CameraParameters(fx, g2o.Vector2(cx, cy), 0)
+    cam_params.set_id(0)
+    optimizer.add_parameter(cam_params)
+
+    # Add camera vertices
+    for i, cam in enumerate(map.cameras):
+        pose = cam.pose
+        R = pose[:3, :3]
+        t = pose[:3, 3]
+        se3 = g2o.Isometry3d(R, t)
+        v_se3 = g2o.VertexSE3Expmap()
+        v_se3.set_id(i)
+        v_se3.set_estimate(se3)
+        if i == 0:
+            v_se3.set_fixed(True)
+        optimizer.add_vertex(v_se3)
+
+    point_id_offset = len(map.cameras)
+    for i, pt in enumerate(map.points):
+        v_pt = g2o.VertexSBAPointXYZ()
+        v_pt.set_id(point_id_offset + i)
+        v_pt.set_estimate(pt.position)
+        v_pt.set_marginalized(True)
+        optimizer.add_vertex(v_pt)
+
+    # Add edges
+    for i, pt in enumerate(map.points):
+        for obs in pt.observations:
+            edge = g2o.EdgeProjectXYZ2UV()
+            edge.set_vertex(0, optimizer.vertex(point_id_offset + i))
+            edge.set_vertex(1, optimizer.vertex(obs.camera_id))
+            edge.set_measurement(obs.image_point)
+            edge.set_information(np.identity(2))
+            edge.set_parameter_id(0, 0)
+            optimizer.add_edge(edge)
+
+    print(f"Optimizing {optimizer.vertices().shape[0]} vertices and {len(optimizer.edges())} edges...")
+    optimizer.initialize_optimization()
+    optimizer.optimize(10)
+
+    # Update map
+    for i, cam in enumerate(map.cameras):
+        est = optimizer.vertex(i).estimate()
+        pose = np.eye(4)
+        pose[:3, :3] = est.rotation().matrix()
+        pose[:3, 3] = est.translation()
+        cam.pose = pose
+
+    for i, pt in enumerate(map.points):
+        pt.position = optimizer.vertex(point_id_offset + i).estimate()
+
+    print("Bundle adjustment with g2o completed.")
+
+# Run g2o-based bundle adjustment
+run_g2o_bundle_adjustment(map, K)
+
+# --- Visualization ---
+print("\nVisualizing updated 3D map and camera poses after bundle adjustment...")
+fig = plt.figure(figsize=(10, 8))
+ax = fig.add_subplot(111, projection='3d')
+
+pts3D_np = np.array([pt.position for pt in map.points])
+ax.scatter(pts3D_np[:, 0], pts3D_np[:, 1], pts3D_np[:, 2], s=2, c='blue', label='3D Points')
+
+for i, cam in enumerate(map.cameras):
+    cam_pos = cam.pose[:3, 3]
+    ax.scatter(*cam_pos, c='red', marker='^', s=40, label=f'Camera {i}' if i < 2 else None)
+    fwd = cam.pose[:3, 2]
+    ax.quiver(*cam_pos, *fwd, length=0.2, color='green')
+
+ax.set_title("Refined 3D Map and Camera Poses (Post-BA with g2o)")
+ax.set_xlabel("X")
+ax.set_ylabel("Y")
+ax.set_zlabel("Z")
+ax.legend()
+plt.tight_layout()
+plt.show()
 
 fig = plt.figure(figsize=(10, 8))
 ax = fig.add_subplot(111, projection='3d')
